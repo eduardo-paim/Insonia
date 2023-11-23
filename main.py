@@ -1,66 +1,53 @@
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Conv2D, Flatten, Dropout, MaxPooling2D
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.regularizers import l2
+from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import numpy as np
-
+import seaborn as sns
 
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 x_train, x_test = x_train / 255.0, x_test / 255.0
 
-train_datagen = ImageDataGenerator(rotation_range=40, width_shift_range=0.2,
-                                   height_shift_range=0.2, shear_range=0.2,
-                                   zoom_range=0.2, horizontal_flip=True, fill_mode='nearest')
+base_model = ResNet50(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu', kernel_regularizer=l2(0.001))(x)
+x = Dropout(0.5)(x)
+predictions = Dense(10, activation='softmax')(x)
 
+model = Model(inputs=base_model.input, outputs=predictions)
 
-model = Sequential([
-    Conv2D(32, (3,3), activation='relu', input_shape=(32, 32, 3)),
-    MaxPooling2D(2, 2),
-    Conv2D(64, (3,3), activation='relu'),
-    MaxPooling2D(2,2),
-    Conv2D(64, (3,3), activation='relu'),
-    Dropout(0.5),
-    Flatten(),
-    Dense(64, activation='relu'),
-    Dropout(0.5),
-    Dense(10, activation='softmax')
-])
+for layer in base_model.layers:
+    layer.trainable = False
 
+model.compile(optimizer=Adam(lr=0.0001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+model.fit(x_train, y_train, epochs=5, validation_split=0.2)
 
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+for layer in base_model.layers[-15:]:
+    layer.trainable = True
 
-early_stopping = EarlyStopping(monitor='val_loss', patience=5)
-model_checkpoint = ModelCheckpoint('best_model.h5', monitor='val_loss', save_best_only=True)
-
-
-history = model.fit(train_datagen.flow(x_train, y_train, batch_size=32),
-                    epochs=10, validation_data=(x_test, y_test),
-                    callbacks=[early_stopping, model_checkpoint])
-
+model.compile(optimizer=Adam(lr=0.00001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+history = model.fit(x_train, y_train, epochs=5, validation_split=0.2)
 
 model.evaluate(x_test, y_test)
 
+y_pred = model.predict(x_test)
+y_pred_classes = np.argmax(y_pred, axis=1)
 
-plt.figure(figsize=(12, 4))
-plt.subplot(1, 2, 1)
-plt.plot(history.history['accuracy'], label='Accuracy')
-plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-plt.legend()
-plt.subplot(1, 2, 2)
-plt.plot(history.history['loss'], label='Loss')
-plt.plot(history.history['val_loss'], label='Validation Loss')
-plt.legend()
-plt.show()
+cm = confusion_matrix(y_test, y_pred_classes)
+clr = classification_report(y_test, y_pred_classes, target_names=[str(i) for i in range(10)])
 
-
-predictions = model.predict(x_test)
-predicted_classes = np.argmax(predictions, axis=1)
 plt.figure(figsize=(10, 10))
-for i in range(25):
-    plt.subplot(5, 5, i+1)
-    plt.imshow(x_test[i])
-    plt.title(f"Actual: {y_test[i][0]}, Predicted: {predicted_classes[i]}")
-    plt.axis('off')
+sns.heatmap(cm, annot=True, fmt='g', vmin=0, cmap='Blues', cbar=False)
+plt.xticks(ticks=np.arange(10) + 0.5, labels=[str(i) for i in range(10)])
+plt.yticks(ticks=np.arange(10) + 0.5, labels=[str(i) for i in range(10)])
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("Confusion Matrix")
 plt.show()
+
+print("Classification Report:\n----------------------\n", clr)
